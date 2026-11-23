@@ -9,6 +9,7 @@ use object::{
    Endianness,
    elf::{
       self,
+      FileHeader32,
       FileHeader64,
    },
    read::elf::{
@@ -23,6 +24,9 @@ use crate::{
    Image,
    Segment,
 };
+
+const PT_ARM_EXIDX: elf::ProgramType = elf::ProgramType(0x7000_0001);
+const SHT_ANDROID_REL: elf::SectionType = elf::SectionType(0x6000_0001);
 
 #[derive(Debug, flub::Error)]
 pub enum FileError {
@@ -53,8 +57,19 @@ pub enum FileError {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Machine {
+   Arm,
    Aarch64,
    X86_64,
+}
+
+impl Machine {
+   #[must_use]
+   pub const fn pointer_size(self) -> usize {
+      match self {
+         Self::Arm => 4,
+         Self::Aarch64 | Self::X86_64 => 8,
+      }
+   }
 }
 
 /// A `PT_LOAD` segment's place in the file.
@@ -69,13 +84,25 @@ pub struct ElfFile<'a> {
    /// Segments at their link addresses with `R_*_RELATIVE` relocations applied,
    /// from `.rela.dyn` plain or Android APS2-packed. RELR and REL keep the
    /// addend in place, which with a zero load base is already the final value.
-   pub image:   Image<'a>,
-   pub machine: Machine,
-   loads:       Vec<FileLoad>,
+   pub image:     Image<'a>,
+   pub machine:   Machine,
+   pub arm_exidx: Option<(usize, usize)>,
+   loads:         Vec<FileLoad>,
 }
 
 impl<'a> ElfFile<'a> {
    pub fn parse(path: &str, data: &'a [u8]) -> Result<Self, FileError> {
+      if data.get(4) == Some(&elf::ELFCLASS32.0) {
+         Self::parse_header::<FileHeader32<Endianness>>(path, data)
+      } else {
+         Self::parse_header::<FileHeader64<Endianness>>(path, data)
+      }
+   }
+
+   fn parse_header<H: FileHeader<Endian = Endianness>>(
+      path: &str,
+      data: &'a [u8],
+   ) -> Result<Self, FileError> {
       let parse = |source| {
          FileError::Parse {
             path: path.to_owned(),
@@ -94,9 +121,10 @@ impl<'a> ElfFile<'a> {
          }
       };
 
-      let header = FileHeader64::<Endianness>::parse(data).map_err(parse)?;
+      let header = H::parse(data).map_err(parse)?;
       let endian = header.endian().map_err(parse)?;
       let (machine, relative) = match header.e_machine(endian) {
+         elf::EM_ARM => (Machine::Arm, elf::R_ARM_RELATIVE.0),
          elf::EM_X86_64 => (Machine::X86_64, elf::R_X86_64_RELATIVE.0),
          elf::EM_AARCH64 => (Machine::Aarch64, elf::R_AARCH64_RELATIVE.0),
          other => {
@@ -113,17 +141,18 @@ impl<'a> ElfFile<'a> {
          segments:     Vec::new(),
          eh_frame_hdr: None,
       };
+      let mut arm_exidx = None;
       let mut loads = Vec::new();
       for segment in header.program_headers(endian, data).map_err(parse)? {
          let bytes = segment.data(endian, data).map_err(|()| truncated())?;
-         let vaddr = usize::try_from(segment.p_vaddr(endian)).map_err(address)?;
+         let vaddr = usize::try_from(segment.p_vaddr(endian).into()).map_err(address)?;
          let flags = segment.p_flags(endian);
 
          match segment.p_type(endian) {
             elf::PT_LOAD => {
                let mut owned = bytes.to_vec();
                owned.resize(
-                  usize::try_from(segment.p_memsz(endian)).map_err(address)?,
+                  usize::try_from(segment.p_memsz(endian).into()).map_err(address)?,
                   0,
                );
                image.segments.push(Segment {
@@ -134,22 +163,30 @@ impl<'a> ElfFile<'a> {
                });
                loads.push(FileLoad {
                   vaddr,
-                  offset: usize::try_from(segment.p_offset(endian)).map_err(address)?,
+                  offset: usize::try_from(segment.p_offset(endian).into()).map_err(address)?,
                   size: bytes.len(),
                });
             },
             elf::PT_NOTE if image.build_id.is_none() => image.build_id = BuildId::from_notes(bytes),
             elf::PT_GNU_EH_FRAME => image.eh_frame_hdr = Some(vaddr),
+            PT_ARM_EXIDX if arm_exidx.is_none() => {
+               arm_exidx = Some((
+                  vaddr,
+                  usize::try_from(segment.p_memsz(endian).into()).map_err(address)?,
+               ));
+            },
             _ => {},
          }
       }
 
+      let ptr_size = machine.pointer_size();
       for section in header.sections(endian, data).map_err(parse)?.iter() {
          let contents = || section.data(endian, data).map_err(parse);
 
          let relocs = match section.sh_type(endian) {
-            elf::SHT_RELA => plain_rela(contents()?, relative),
-            elf::SHT_ANDROID_RELA => {
+            elf::SHT_RELA if ptr_size == 4 => plain_rela32(contents()?, relative),
+            elf::SHT_RELA => plain_rela64(contents()?, relative),
+            elf::SHT_ANDROID_RELA | SHT_ANDROID_REL => {
                aps2(contents()?, relative).map_err(|message| {
                   FileError::Packed {
                      path: path.to_owned(),
@@ -172,13 +209,19 @@ impl<'a> ElfFile<'a> {
                   }
                })?;
             let at = offset - segment.addr;
-            segment.bytes.to_mut()[at..at + 8].copy_from_slice(&addend.to_le_bytes());
+            if ptr_size == 4 {
+               segment.bytes.to_mut()[at..at + 4]
+                  .copy_from_slice(&(addend as u32).to_le_bytes());
+            } else {
+               segment.bytes.to_mut()[at..at + 8].copy_from_slice(&addend.to_le_bytes());
+            }
          }
       }
 
       Ok(Self {
          image,
          machine,
+         arm_exidx,
          loads,
       })
    }
@@ -195,7 +238,20 @@ impl<'a> ElfFile<'a> {
    }
 }
 
-fn plain_rela(bytes: &[u8], relative: u32) -> Vec<(usize, u64)> {
+fn plain_rela32(bytes: &[u8], relative: u32) -> Vec<(usize, u64)> {
+   bytes
+      .as_chunks::<12>()
+      .0
+      .iter()
+      .filter_map(|entry| {
+         let word = |at: usize| u32::from_le_bytes(entry[at..at + 4].try_into().unwrap());
+         let offset = usize::try_from(word(0)).ok()?;
+         (word(4) & 0xFF == relative).then_some((offset, u64::from(word(8))))
+      })
+      .collect()
+}
+
+fn plain_rela64(bytes: &[u8], relative: u32) -> Vec<(usize, u64)> {
    bytes
       .as_chunks::<24>()
       .0

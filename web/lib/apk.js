@@ -17,6 +17,7 @@ export const PLUGIN_BUNDLE = 'libplm.plugins.so';
 // under web/), the loader (crates/loader) first. The host patch handles x86_64 too; it needs a loader build.
 export const ABIS = {
   'arm64-v8a': { split: 'config.arm64_v8a', libs: { [INJECTED]: 'plugins/libphoenix-arm64.so', 'libshadowhook_nothing.so': 'plugins/libshadowhook_nothing-arm64.so' } },
+  'armeabi-v7a': { split: 'config.armeabi_v7a', libs: { [INJECTED]: 'plugins/libphoenix-arm.so', 'libshadowhook_nothing.so': 'plugins/libshadowhook_nothing-arm.so' } },
 };
 /** ABI of a split (the one whose lib/<abi>/ holds the host lib), or undefined. */
 export const abiOf = (entries) => Object.keys(ABIS).find((a) => entries.some((e) => e.name === `lib/${a}/${LIBRARY}`));

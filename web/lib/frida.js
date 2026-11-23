@@ -21,6 +21,7 @@
 /** gadget per Android ABI dir */
 export const GADGET_URLS = {
   'arm64-v8a': 'plugins/frida-gadget-17.27.4-android-arm64.so.gz',
+  'armeabi-v7a': 'plugins/frida-gadget-17.27.4-android-arm.so.gz',
   'x86_64': 'plugins/frida-gadget-17.27.4-android-x86_64.so.gz',
 };
 export const BOOTSTRAP_URL = 'plugins/frida-bootstrap.js';

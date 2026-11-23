@@ -8,7 +8,7 @@ const TRACKER = 'https://tracker.vendetta.rocks';
 const PROXY = (new URLSearchParams(location.search).get('proxy') ?? DEFAULT_PROXY).replace(/\/$/, '');
 const DENSITIES = [['ldpi', 120], ['mdpi', 160], ['hdpi', 240], ['xhdpi', 320], ['xxhdpi', 480], ['xxxhdpi', 640]];
 const LANGS = ['en', 'ar', 'bg', 'cs', 'da', 'de', 'el', 'es', 'fi', 'fr', 'hi', 'hr', 'hu', 'id', 'it', 'ja', 'ko', 'lt', 'nl', 'no', 'pl', 'pt', 'ro', 'ru', 'sv', 'th', 'tr', 'uk', 'vi', 'zh'];
-const ABI = 'arm64-v8a'; // the only ABI with a loader build (web/plugins)
+const selectedAbi = () => $('abi').value;
 const $ = (id) => document.getElementById(id);
 
 // --- setup ------------------------------------------------------------------------------
@@ -73,16 +73,16 @@ async function download(vc, split, optional) {
 
 function splitNames() {
   const lang = $('lang').value;
-  return { abi: ABIS[ABI].split, density: `config.${$('dpi').value}`, lang: lang === 'none' ? null : `config.${lang}` };
+  return { abi: ABIS[selectedAbi()].split, density: `config.${$('dpi').value}`, lang: lang === 'none' ? null : `config.${lang}` };
 }
 
-async function patchAndOffer(vc, base, abi, configs) {
+async function patchAndOffer(vc, base, abi, configs, abiName = selectedAbi()) {
   const plugins = await pluginInput();
-  const frida = $('frida-on').checked ? await fridaInput() : null;
+  const frida = $('frida-on').checked ? await fridaInput(abiName) : null;
   const s = step('Patch and sign');
   s.progress(0.5, 'working…');
   const packageName = chosenPackage(), side = packageName !== 'com.discord';
-  const libraries = !plugins ? [] : await Promise.all(Object.entries(ABIS[ABI].libs).map(async ([name, url]) => ({ name, bytes: await fetchBytes(url) })));
+  const libraries = !plugins ? [] : await Promise.all(Object.entries(ABIS[abiName].libs).map(async ([name, url]) => ({ name, bytes: await fetchBytes(url) })));
   const keys = keysFrom(await (await fetchOk('signing-key.json')).json());
   const parts = await buildPatchedApk({ base, abi, configs, keys, libraries, plugins, frida, packageName, label: side ? 'Discord Phoenix' : null, log });
   const blob = new Blob(parts, { type: 'application/vnd.android.package-archive' });
@@ -148,13 +148,13 @@ async function pluginInput() {
 // Frida: Frida scripts from picked files and the editor (prefilled with the example), bundled into one script
 ($('frida-on').onchange = () => { $('frida').hidden = !$('frida-on').checked; })();
 fetch('plugins/frida-example.js').then((r) => r.text()).then((t) => { if (!$('frida-code').value) $('frida-code').value = t; }).catch(() => {});
-async function fridaInput() {
+async function fridaInput(abiName = selectedAbi()) {
   const scripts = await Promise.all([...$('frida-files').files].map(async (f) => ({ name: f.name, code: await f.text() })));
   const code = $('frida-code').value.trim();
   if (code) scripts.push({ name: 'editor.js', code });
   const script = bundleScripts(scripts, await (await fetchOk(BOOTSTRAP_URL)).text());
   const s = step('Download frida-gadget');
-  const res = await fetch(GADGET_URLS[ABI]);
+  const res = await fetch(GADGET_URLS[abiName]);
   if (!res.ok) { s.fail(`HTTP ${res.status}`); throw new Error(`frida-gadget: HTTP ${res.status}`); }
   const gadget = await gunzip(new Uint8Array(await res.arrayBuffer()));
   s.done(mb(gadget.length));
@@ -210,12 +210,12 @@ function showManual(vc) {
         const u8 = new Uint8Array(await f.arrayBuffer());
         const entries = readZip(u8), names = entries.map((e) => e.name), abi = abiOf(entries);
         if (names.includes('classes.dex')) found.base = u8;
-        else if (abi) found.abi = u8;
+        else if (abi) { found.abi = u8; found.abiName = abi; }
         else if (names.includes('resources.arsc')) found.configs.push(u8);
         log(`${f.name}: ${names.includes('classes.dex') ? 'base' : abi ? `native libs (${abi})` : names.some((x) => x.startsWith('lib/')) ? 'native libs (unsupported CPU, ignored)' : 'config split'}`);
       }
-      if (!found.base || !found.abi) throw new Error('need at least base and config.arm64_v8a');
-      await patchAndOffer(vc, found.base, found.abi, found.configs);
+      if (!found.base || !found.abi) throw new Error(`need at least base and ${ABIS[selectedAbi()].split}`);
+      await patchAndOffer(vc, found.base, found.abi, found.configs, found.abiName);
       $('go').disabled = false;
     } catch (e) { fail(e); }
   };

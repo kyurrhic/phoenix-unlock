@@ -40,6 +40,8 @@ const SIGNING_KEY_JSON: &str = include_str!("../../../web/signing-key.json");
 
 const LOADER_ASSET: &str = if cfg!(target_arch = "x86_64") {
    "plugins/libphoenix-x86_64.so"
+} else if cfg!(target_arch = "arm") {
+   "plugins/libphoenix-arm.so"
 } else {
    "plugins/libphoenix-arm64.so"
 };
