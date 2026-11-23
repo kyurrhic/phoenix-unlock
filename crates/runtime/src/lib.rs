@@ -36,6 +36,7 @@ mod local;
 #[cfg(target_os = "android")] mod picker;
 #[cfg(target_os = "android")] mod remote;
 #[cfg(target_os = "android")] mod settings;
+mod staff;
 #[cfg(target_os = "android")] mod store;
 #[cfg(target_os = "android")] mod update;
 
@@ -221,15 +222,15 @@ pub fn plugins() -> Vec<PluginInfo> {
    engine().map_or_default(|engine| engine.plugins())
 }
 
-/// Whether `READY` and `USER_UPDATE` carry the staff flag.
+/// Whether the signed-in user has the staff flag.
 #[must_use]
 pub fn staff_enabled() -> bool {
-   gateway::staff_enabled()
+   staff::enabled()
 }
 
 /// Turns staff unlock on or off and remembers the choice across restarts.
 pub fn set_staff_enabled(enabled: bool) {
-   gateway::set_staff_enabled(enabled);
+   staff::set_enabled(enabled);
    if let Some(engine) = engine() {
       engine.save_choices();
    }

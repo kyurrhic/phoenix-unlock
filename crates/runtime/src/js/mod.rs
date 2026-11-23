@@ -788,7 +788,7 @@ fn storage<'js>(ctx: &Ctx<'js>, plugin: &str) -> rquickjs::Result<Object<'js>> {
    clippy::significant_drop_tightening,
    reason = "plugins load under one engine lock so no gateway event sees a half-loaded set"
 )]
-pub fn load_plugins(state: &State, bundled: Vec<Plugin>) -> Result<Vec<String>, Error> {
+pub fn load_plugins(state: &'static State, bundled: Vec<Plugin>) -> Result<Vec<String>, Error> {
    let choices_path = state.choices_path();
    let choices = match fs::read(&choices_path) {
       Ok(bytes) => {
@@ -800,7 +800,7 @@ pub fn load_plugins(state: &State, bundled: Vec<Plugin>) -> Result<Vec<String>, 
       Err(err) if err.kind() == ErrorKind::NotFound => Choices::default(),
       Err(err) => return Err(io_error(&choices_path)(err)),
    };
-   gateway::set_staff_enabled(choices.staff);
+   crate::staff::start(choices.staff, &state.image);
    #[cfg(target_os = "android")]
    crate::set_remote_shell_flag(choices.remote_shell);
 

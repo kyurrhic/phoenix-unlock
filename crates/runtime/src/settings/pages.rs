@@ -146,10 +146,7 @@ fn debug_section() -> Tree {
       switch_row(
          None,
          "Staff unlock",
-         Some(
-            "Grant the staff flag on READY/USER_UPDATE to unlock Discord experiments (restart to \
-             apply)",
-         ),
+         Some("Grant the staff flag to unlock Discord experiments"),
          crate::staff_enabled(),
          Press::ToggleStaff,
          Press::ToggleStaff,
